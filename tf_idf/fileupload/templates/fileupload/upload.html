@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TF-IDF Анализатор</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .upload-form {
+            border: 1px solid #ddd;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="file"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        .loading {
+            text-align: center;
+            display: none;
+        }
+        .error {
+            color: red;
+            margin-top: 15px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>TF-IDF Анализатор текста</h1>
+    
+    <div class="upload-form">
+        <div class="form-group">
+            <label for="file-upload">Выберите текстовый файл для анализа:</label>
+            <input type="file" id="file-upload" accept=".txt">
+        </div>
+        <button id="upload-btn">Загрузить и проанализировать</button>
+        <button id="clear-btn" style="background-color: #f44336; margin-left: 10px;">Очистить базу данных</button>
+        <div class="loading" id="loading">
+            Обработка файла...
+        </div>
+        <div class="error" id="error"></div>
+    </div>
+    
+    <div id="results">
+        <h2>Результаты анализа</h2>
+        <p>Таблица с 50 словами с наибольшими значениями IDF:</p>
+        <table id="results-table">
+            <thead>
+                <tr>
+                    <th>Слово</th>
+                    <th>TF</th>
+                    <th>IDF</th>
+                    <th>Документов</th>
+                </tr>
+            </thead>
+            <tbody id="results-body">
+                <!-- Результаты будут добавлены здесь -->
+            </tbody>
+        </table>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const uploadBtn = document.getElementById('upload-btn');
+            const clearBtn = document.getElementById('clear-btn');
+            const fileInput = document.getElementById('file-upload');
+            const loadingIndicator = document.getElementById('loading');
+            const errorElement = document.getElementById('error');
+            const resultsTable = document.getElementById('results');
+            const resultsBody = document.getElementById('results-body');
+            
+            // Функция для получения CSRF-токена из cookies
+            function getCookie(name) {
+                let cookieValue = null;
+                if (document.cookie && document.cookie !== '') {
+                    const cookies = document.cookie.split(';');
+                    for (let i = 0; i < cookies.length; i++) {
+                        const cookie = cookies[i].trim();
+                        if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                            cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                            break;
+                        }
+                    }
+                }
+                return cookieValue;
+            }
+            
+            // Получаем CSRF-токен
+            const csrftoken = getCookie('csrftoken');
+            
+            // Скрыть результаты изначально
+            resultsTable.style.display = 'none';
+            
+            uploadBtn.addEventListener('click', function() {
+                const file = fileInput.files[0];
+                
+                if (!file) {
+                    showError('Пожалуйста, выберите файл');
+                    return;
+                }
+                
+                // Проверка типа файла (принимаем только текстовые файлы)
+                if (file.type !== 'text/plain' && !file.name.endsWith('.txt')) {
+                    showError('Пожалуйста, выберите текстовый файл (.txt)');
+                    return;
+                }
+                
+                // Создаем FormData для отправки файла
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                // Показываем индикатор загрузки
+                showLoading();
+                
+                // Отправляем файл на сервер
+                fetch('/api/upload/', {
+                    method: 'POST',
+                    body: formData,
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Ошибка сервера: ' + response.statusText);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    // Скрываем индикатор загрузки
+                    hideLoading();
+                    
+                    // Отображаем результаты
+                    showResults(data);
+                })
+                .catch(error => {
+                    hideLoading();
+                    showError(error.message);
+                });
+            });
+            
+            // Добавляем обработчик для кнопки очистки базы данных
+            clearBtn.addEventListener('click', function() {
+                if (confirm('Вы уверены, что хотите очистить базу данных? Это действие удалит все загруженные файлы и статистику.')) {
+                    // Показываем индикатор загрузки
+                    showLoading();
+                    
+                    // Отправляем запрос на очистку базы данных
+                    fetch('/api/clear-db/', {
+                        method: 'POST',
+                        headers: {
+                            'X-CSRFToken': csrftoken,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({}),
+                    })
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error('Ошибка сервера: ' + response.statusText);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        // Скрываем индикатор загрузки
+                        hideLoading();
+                        
+                        // Очищаем таблицу результатов
+                        resultsBody.innerHTML = '';
+                        resultsTable.style.display = 'none';
+                        
+                        // Показываем сообщение об успехе
+                        alert('База данных успешно очищена!');
+                    })
+                    .catch(error => {
+                        hideLoading();
+                        showError(error.message);
+                    });
+                }
+            });
+            
+            function showLoading() {
+                loadingIndicator.style.display = 'block';
+                errorElement.style.display = 'none';
+                resultsTable.style.display = 'none';
+            }
+            
+            function hideLoading() {
+                loadingIndicator.style.display = 'none';
+            }
+            
+            function showError(message) {
+                errorElement.textContent = message;
+                errorElement.style.display = 'block';
+            }
+            
+            function showResults(data) {
+                // Очищаем предыдущие результаты
+                resultsBody.innerHTML = '';
+                
+                // Добавляем новые строки для каждого слова
+                data.forEach(item => {
+                    const row = document.createElement('tr');
+                    
+                    const wordCell = document.createElement('td');
+                    wordCell.textContent = item.word;
+                    
+                    const tfCell = document.createElement('td');
+                    tfCell.textContent = item.tf.toFixed(4);
+                    
+                    const idfCell = document.createElement('td');
+                    idfCell.textContent = item.idf.toFixed(4);
+                    
+                    const docCountCell = document.createElement('td');
+                    docCountCell.textContent = item.doc_count;
+                    
+                    row.appendChild(wordCell);
+                    row.appendChild(tfCell);
+                    row.appendChild(idfCell);
+                    row.appendChild(docCountCell);
+                    
+                    resultsBody.appendChild(row);
+                });
+                
+                // Показываем таблицу результатов
+                resultsTable.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html> 
